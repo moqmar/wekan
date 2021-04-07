@@ -1,6 +1,7 @@
 import _ from 'underscore';
 import SyncedCron from 'meteor/percolate:synced-cron';
 import LDAP from './ldap';
+import Boards from '../../../models/boards';
 import { log_debug, log_info, log_warn, log_error } from './logger';
 
 Object.defineProperty(Object.prototype, "getLDAPValue", {
@@ -424,6 +425,34 @@ function sync() {
           log_info('Can\'t sync user', user.username);
         }
       });
+    }
+
+
+    if (LDAP.settings_get('LDAP_BACKGROUND_SYNC_ASSIGN_BOARD_MEMBERS_BY_FILTERS')) {
+      const boardUserMap = JSON.parse(LDAP.settings_get('LDAP_BACKGROUND_SYNC_ASSIGN_BOARD_MEMBERS_BY_FILTERS'));
+      // { "9rQbnRTsfYFqBiZL2": "(|(memberOf=cn=farafin,ou=groups,dc=farafin,dc=de)(memberOf=cn=helfer,ou=groups,dc=farafin,dc=de))" }
+      for (let boardId in boardUserMap) {
+        users.forEach(function(user) {
+          let ldapUser;
+          if (user.services && user.services.ldap && user.services.ldap.id) {
+            ldapUser = ldap.getUserByIdSync(user.services.ldap.id, user.services.ldap.idAttribute);
+          } else {
+            ldapUser = ldap.getUserByUsernameSync(user.username);
+          }
+
+          const userMatches = (ldap.searchAllSync(ldap.options.BaseDN, {
+            filter: "(&" + ldap.getUserFilter(user.username) + boardUserMap[boardId] + ")",
+            scope: "sub"
+          }));
+          const board = Meteor.boards.findOne(boardId);
+          if (userMatches) {
+            board.addMember(user.username);
+          } else {
+            board.removeMember(user.username);
+          }
+          log_info('Can\'t sync user', user.username, ldapUser);
+        });
+      }
     }
   } catch (error) {
     log_error(error);
